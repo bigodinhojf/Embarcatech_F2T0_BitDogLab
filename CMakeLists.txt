@@ -62,6 +62,7 @@ target_link_libraries(Embarcatech_F2T0_BitDogLab
         hardware_adc
         hardware_pwm
         hardware_pio
+        hardware_timer
         )
 
 pico_add_extra_outputs(Embarcatech_F2T0_BitDogLab)

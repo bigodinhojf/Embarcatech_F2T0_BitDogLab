@@ -6,6 +6,7 @@
 #include "hardware/adc.h"
 #include "hardware/pwm.h"
 #include "hardware/pio.h"
+#include "hardware/timer.h" 
 #include "ws2812.pio.h"
 #include "pico/bootrom.h"
 
@@ -100,12 +101,15 @@ void posicao_quadrado(){
     adc_select_input(1); // Seleciona o ADC1 referente ao VRX do Joystick (GPIO 27)
     uint16_t value_vrx = adc_read(); // Ler o valor do ADC selecionado (ADC1 - VRX) e guarda
 
-    uint y = (1-(value_vry/4095))*54; // Admensionaliza, multiplica pelo valor máximo e inverte o valor
-    uint x = (value_vrx/4095)*118; // Admensionaliza e multiplica pelo valor máximo
-    
+    uint y = (1-(value_vry/4095.0))*54; // Admensionaliza, multiplica pelo valor máximo e inverte o valor
+    uint x = (value_vrx/4095.0)*118; // Admensionaliza e multiplica pelo valor máximo
+
+    printf("VRX: %d | VRY: %d | X: %d | y: %d \n", value_vrx, value_vry, x, y);
+
     ssd1306_fill(&ssd, false); // Limpa o display
     ssd1306_rect(&ssd, y, x, 8, 8, true, preenchimento); // Desenha o quadrado 8x8
     ssd1306_rect(&ssd, 0, 0, 127, 63, true, false); // Desenha a borda do display
+    ssd1306_send_data(&ssd); // Atualiza o display
 }
 
 // Função para definir a cor do LED RGB
@@ -164,13 +168,18 @@ void led_rgb(){
     }
 }
 
+// Função de callback do alarme do buzzer
+int64_t alarm_callback_buzzer(alarm_id_t id, void *user_data){
+    pwm_set_enabled(slice_A, false);
+    pwm_set_enabled(slice_B, false);
+    return 0;
+}
+
 // Função do sinal sonoro dos buzzers
 void beep_buzzer(){
     pwm_set_enabled(slice_A, true);
     pwm_set_enabled(slice_B, true);
-    sleep_ms(100);
-    pwm_set_enabled(slice_A, false);
-    pwm_set_enabled(slice_B, false);
+    add_alarm_in_ms(100, alarm_callback_buzzer, NULL, false);
 }
 
 // Função que guarda as animações da matriz de LEDs
@@ -382,13 +391,35 @@ void num_matriz_leds(char c){
     }
 }
 
+// Função de callback do temporizador
+bool repeating_timer_callback(struct repeating_timer *t) {
+    
+    // Monitor serial
+    if (stdio_usb_connected()) {
+        int ch = getchar_timeout_us(0);  // leitura não bloqueante
+        if (ch != PICO_ERROR_TIMEOUT) {
+            char c = (char)ch;
+            printf("Número recebido: %c\n", c);
+            if (c >= '0' && c <= '9') {
+                num_matriz_leds(c);
+            } else {
+                printf("Número inválido!\n");
+            }
+        }
+    }
+
+    // Retorna true para manter o temporizador repetindo.
+    return true;
+}
+
 // Função de interrupção dos botões
 void gpio_irq_handler(uint gpio, uint32_t events){
     //Debouncing
     uint32_t current_time = to_us_since_boot(get_absolute_time()); // Pega o tempo atual e transforma em us
-    if(current_time - last_time > 1000000){
+    if((current_time - last_time) > 500000){
+        last_time = current_time; // Atualização de tempo do último clique
         if(gpio == button_A){
-            if(cor_led >= 8){
+            if(cor_led >= 7){
                 cor_led = 0;
             }else{
                 cor_led += 1;
@@ -397,12 +428,13 @@ void gpio_irq_handler(uint gpio, uint32_t events){
         }else if(gpio == button_B){
             reset_usb_boot(0, 0);
         }else if(gpio == joystick_PB){
-            preenchimento == !preenchimento;
+            preenchimento = !preenchimento;
         }
         beep_buzzer();
     }
 }
 
+// Função principal
 int main(){
     // -- Inicializações
     // Monitor serial
@@ -473,6 +505,12 @@ int main(){
     desliga(); // Para limpar o buffer dos LEDs
     buffer();
 
+    // Declaração de uma estrutura de temporizador de repetição.
+    struct repeating_timer timer;
+
+    // Configura o temporizador para chamar a função de callback a cada 100ms.
+    add_repeating_timer_ms(100, repeating_timer_callback, NULL, &timer);
+
     // Interrupção dos botões
     gpio_set_irq_enabled_with_callback(button_A, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
     gpio_set_irq_enabled_with_callback(button_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
@@ -481,19 +519,6 @@ int main(){
     // Loop principal
     while (true) {
         posicao_quadrado(); // Função que define a posição do quadrado 8x8
-
-        // Monitor serial
-        if(stdio_usb_connected()){
-            char c; // Variável que guarda o caractere digitado no monitor serial
-            if(scanf("%c", &c) == 1){
-                printf("Número recebido: %c \n", c);
-                if(c >= '0' && c <= '9'){
-                    num_matriz_leds(c);
-                }else{
-                    printf("Número inválido!\n");
-                }
-            }
-        }
-        sleep_ms(50);
+        sleep_ms(40);
     }
 }
